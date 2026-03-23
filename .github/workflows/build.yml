@@ -1,36 +1,47 @@
-# This is a basic workflow to help you get started with Actions
-
 name: CI
 
-# Controls when the workflow will run
 on:
-  # Triggers the workflow on push or pull request events but only for the "main" branch
   push:
     branches: [ "main" ]
   pull_request:
     branches: [ "main" ]
-
-  # Allows you to run this workflow manually from the Actions tab
   workflow_dispatch:
 
-# A workflow run is made up of one or more jobs that can run sequentially or in parallel
 jobs:
-  # This workflow contains a single job called "build"
   build:
-    # The type of runner that the job will run on
     runs-on: ubuntu-latest
-
-    # Steps represent a sequence of tasks that will be executed as part of the job
     steps:
-      # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
       - uses: actions/checkout@v4
+        # 拉取ZMK依赖（若基于ZMK开发）
+        with:
+          submodules: recursive
 
-      # Runs a single command using the runners shell
-      - name: Run a one-line script
-        run: echo Hello, world!
-
-      # Runs a set of commands using the runners shell
-      - name: Run a multi-line script
+      # 步骤1：安装编译依赖（ZMK/NRF52840）
+      - name: Install dependencies
         run: |
-          echo Add other actions to build,
-          echo test, and deploy your project.
+          sudo apt update
+          sudo apt install -y gcc-arm-none-eabi python3 python3-pip
+          pip3 install uf2conv  # 安装UF2转换工具
+
+      # 步骤2：编译固件（生成.hex/.elf）
+      - name: Build firmware
+        run: |
+          # 替换为你的实际编译命令（以west为例）
+          west build -b xiao_ble/zmk . --pristine
+          # 验证编译产物（可选）
+          ls -la build/zephyr/ | grep -E "(hex|elf)"
+
+      # 步骤3：将hex转换为UF2
+      - name: Convert to UF2
+        run: |
+          # 转换命令（适配你的hex文件路径）
+          uf2conv.py build/zephyr/zephyr.hex -c -o xiao_ble.zmk.uf2
+          # 验证UF2生成
+          ls -la | grep uf2
+
+      # 步骤4：上传UF2产物（便于下载）
+      - name: Upload UF2 artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: xiao_ble-uf2-firmware
+          path: ./xiao_ble.zmk.uf2
