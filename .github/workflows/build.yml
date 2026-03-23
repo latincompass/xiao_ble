@@ -1,4 +1,4 @@
-name: CI
+name: Build XIAO BLE ZMK Firmware
 
 on:
   push:
@@ -11,44 +11,97 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
+      # 步骤1：拉取你的xiao_ble配置仓库
       - uses: actions/checkout@v4
         with:
-          submodules: recursive  # 拉取ZMK子模块（关键，否则编译会失败）
+          path: xiao_ble  # 拉取到xiao_ble子目录
+          fetch-depth: 1
 
-      # 安装编译依赖 + UF2转换工具
-      - name: Install dependencies
+      # 步骤2：拉取ZMK官方仓库（含west.yml）
+      - name: Clone ZMK core repository
         run: |
-          sudo apt update
-          sudo apt install -y gcc-arm-none-eabi python3 python3-pip git
-          # 下载官方uf2conv.py工具
-          wget https://raw.githubusercontent.com/microsoft/uf2/master/utils/uf2conv.py -O /usr/local/bin/uf2conv.py
-          chmod +x /usr/local/bin/uf2conv.py
-          # 安装ZMK依赖（若需要）
-          pip3 install west
-
-      # 初始化ZMK编译环境（关键，ZMK必须先初始化west）
-      - name: Init ZMK west environment
-        run: |
+          git clone --depth 1 --recurse-submodules https://github.com/zmkfirmware/zmk.git
+          cd zmk
+          # 初始化west环境（关键：ZMK根目录有west.yml）
           west init -l .
-          west update
+          # 拉取Zephyr内核及依赖（约1-2GB，耐心等待）
+          west update --narrow -o=--depth=1
           west zephyr-export
 
-      # 编译固件（生成hex/elf）
-      - name: Build firmware
+      # 步骤3：安装编译依赖
+      - name: Install build dependencies
         run: |
-          west build -b xiao_ble/zmk . --pristine
-          # 验证编译产物
-          ls -la build/zephyr/ | grep -E "(hex|elf)"
+          sudo apt update && sudo apt install -y \
+            gcc-arm-none-eabi \
+            python3-pip \
+            ninja-build \
+            dfu-util \
+            device-tree-compiler \
+            libssl-dev
+          pip3 install --user west
+          echo "PATH=$HOME/.local/bin:$PATH" >> $GITHUB_ENV
 
-      # 转换为UF2
-      - name: Convert to UF2
+      # 步骤4：将你的XIAO BLE配置复制到ZMK板型目录
+      - name: Copy XIAO BLE board config to ZMK
         run: |
-          python3 /usr/local/bin/uf2conv.py build/zephyr/zephyr.hex -c -o xiao_ble.zmk.uf2
-          ls -la | grep uf2
+          mkdir -p zmk/boards/arm/xiao_ble
+          cp -r xiao_ble/board.yml zmk/boards/arm/xiao_ble/
+          cp -r xiao_ble/xiao_ble.zmk.yml zmk/boards/arm/xiao_ble/
 
-      # 上传UF2产物
-      - name: Upload UF2 artifact
+      # 步骤5：创建基础键盘布局（可根据需求修改）
+      - name: Create ZMK keymap and config
+        run: |
+          # 创建板型编译配置目录
+          mkdir -p zmk/app/boards/arm/xiao_ble
+          # 创建keymap布局目录
+          mkdir -p zmk/app/src/keymaps/xiao_ble
+          
+          # 写入基础keymap（单键测试：按按键发ESC）
+          cat > zmk/app/src/keymaps/xiao_ble/keymap.dtsi << EOF
+          #include <dt-bindings/zmk/keys.h>
+          / {
+              keymap {
+                  compatible = "zmk,keymap";
+                  default_layer {
+                      bindings = <&kp ESC>;
+                  };
+              };
+          };
+          EOF
+          
+          # 写入板型配置（启用BLE+USB）
+          cat > zmk/app/boards/arm/xiao_ble/xiao_ble.conf << EOF
+          CONFIG_BT=y
+          CONFIG_BT_PERIPHERAL=y
+          CONFIG_ZMK_BLE=y
+          CONFIG_USB=y
+          CONFIG_USB_DEVICE=y
+          CONFIG_ZMK_USB=y
+          CONFIG_CONSOLE=y
+          EOF
+
+      # 步骤6：编译ZMK固件
+      - name: Build ZMK firmware for XIAO BLE
+        run: |
+          cd zmk/app
+          # 编译固件（指定板型为xiao_ble/zmk，布局为xiao_ble）
+          west build -b xiao_ble/zmk --pristine -- -DZMK_KEYMAP=xiao_ble
+
+      # 步骤7：转换为UF2格式（便于刷入XIAO BLE）
+      - name: Convert firmware to UF2
+        run: |
+          # 下载UF2转换工具
+          wget https://raw.githubusercontent.com/microsoft/uf2/master/utils/uf2conv.py -O uf2conv.py
+          chmod +x uf2conv.py
+          # 转换HEX到UF2
+          python3 uf2conv.py zmk/app/build/zephyr/zephyr.hex -c -o xiao_ble-zmk.uf2
+
+      # 步骤8：上传固件产物（可下载刷入）
+      - name: Upload firmware artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: xiao_ble-uf2-firmware
-          path: ./xiao_ble.zmk.uf2
+          name: xiao_ble-zmk-firmware
+          path: |
+            xiao_ble-zmk.uf2
+            zmk/app/build/zephyr/zephyr.hex
+            zmk/app/build/zephyr/zephyr.elf
