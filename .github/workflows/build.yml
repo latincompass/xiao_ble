@@ -12,34 +12,41 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        # 拉取ZMK依赖（若基于ZMK开发）
         with:
-          submodules: recursive
+          submodules: recursive  # 拉取ZMK子模块（关键，否则编译会失败）
 
-      # 步骤1：安装编译依赖（ZMK/NRF52840）
+      # 安装编译依赖 + UF2转换工具
       - name: Install dependencies
         run: |
           sudo apt update
-          sudo apt install -y gcc-arm-none-eabi python3 python3-pip
-          pip3 install uf2conv  # 安装UF2转换工具
+          sudo apt install -y gcc-arm-none-eabi python3 python3-pip git
+          # 下载官方uf2conv.py工具
+          wget https://raw.githubusercontent.com/microsoft/uf2/master/utils/uf2conv.py -O /usr/local/bin/uf2conv.py
+          chmod +x /usr/local/bin/uf2conv.py
+          # 安装ZMK依赖（若需要）
+          pip3 install west
 
-      # 步骤2：编译固件（生成.hex/.elf）
+      # 初始化ZMK编译环境（关键，ZMK必须先初始化west）
+      - name: Init ZMK west environment
+        run: |
+          west init -l .
+          west update
+          west zephyr-export
+
+      # 编译固件（生成hex/elf）
       - name: Build firmware
         run: |
-          # 替换为你的实际编译命令（以west为例）
           west build -b xiao_ble/zmk . --pristine
-          # 验证编译产物（可选）
+          # 验证编译产物
           ls -la build/zephyr/ | grep -E "(hex|elf)"
 
-      # 步骤3：将hex转换为UF2
+      # 转换为UF2
       - name: Convert to UF2
         run: |
-          # 转换命令（适配你的hex文件路径）
-          uf2conv.py build/zephyr/zephyr.hex -c -o xiao_ble.zmk.uf2
-          # 验证UF2生成
+          python3 /usr/local/bin/uf2conv.py build/zephyr/zephyr.hex -c -o xiao_ble.zmk.uf2
           ls -la | grep uf2
 
-      # 步骤4：上传UF2产物（便于下载）
+      # 上传UF2产物
       - name: Upload UF2 artifact
         uses: actions/upload-artifact@v4
         with:
